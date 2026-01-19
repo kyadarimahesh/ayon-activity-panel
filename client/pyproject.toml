@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ayon-activity-panel"
+version = "1.0.0"
+description = "Standalone activity panel widget for AYON applications"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "PySide2>=6.0.0",
+    "qtpy>=2.0.0",
+    "ayon-python-api>=1.0.0",
+    "requests>=2.32.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=22.0.0"
+]

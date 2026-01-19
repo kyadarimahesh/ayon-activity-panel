@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>activityCommentDock</class>
+ <widget class="QDockWidget" name="activityCommentDock">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>970</width>
+    <height>729</height>
+   </rect>
+  </property>
+  <property name="features">
+   <set>QDockWidget::NoDockWidgetFeatures</set>
+  </property>
+  <property name="allowedAreas">
+   <set>Qt::NoDockWidgetArea</set>
+  </property>
+  <property name="windowTitle">
+   <string>Version Info</string>
+  </property>
+  <widget class="QWidget" name="activityCommentWidget">
+   <layout class="QVBoxLayout" name="activityCommentLayout">
+    <item>
+     <widget class="QSplitter" name="mainSplitter">
+      <widget class="QWidget" name="versionDetailsWidget">
+       <layout class="QVBoxLayout" name="versionDetailsLayout">
+        <item>
+         <layout class="QGridLayout" name="versionGridLayout">
+          <item row="0" column="0">
+           <widget class="QLabel" name="pathLabel">
+            <property name="text">
+             <string>Path:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QLabel" name="pathLabel_value">
+            <property name="text">
+             <string/>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+            <property name="textInteractionFlags">
+             <set>Qt::NoTextInteraction</set>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="versionLabel">
+            <property name="text">
+             <string>Version:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QComboBox" name="versionComboBox"/>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="statusLabel">
+            <property name="text">
+             <string>Status:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QComboBox" name="statusComboBox"/>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="authorLabel">
+            <property name="text">
+             <string>Author:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QLineEdit" name="authorLineEdit">
+            <property name="text">
+             <string/>
+            </property>
+            <property name="readOnly">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QTabWidget" name="contentTabWidget">
+       <property name="currentIndex">
+        <number>0</number>
+       </property>
+       <widget class="QWidget" name="activityTab">
+        <attribute name="title">
+         <string>Activity</string>
+        </attribute>
+        <layout class="QVBoxLayout" name="activityTabLayout">
+         <item>
+          <widget class="QTextBrowser" name="textBrowser_activity_panel"/>
+         </item>
+        </layout>
+       </widget>
+       <widget class="QWidget" name="representationsTab">
+        <attribute name="title">
+         <string>Representations</string>
+        </attribute>
+        <layout class="QVBoxLayout" name="representationsTabLayout">
+         <item>
+          <widget class="QPushButton" name="bakingButton">
+           <property name="text">
+            <string>baking_h264</string>
+           </property>
+           <property name="checkable">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="h264Button">
+           <property name="text">
+            <string>h264</string>
+           </property>
+           <property name="checkable">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="verticalSpacer">
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>40</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+        </layout>
+       </widget>
+      </widget>
+      <widget class="QWidget" name="commentWidget">
+       <layout class="QVBoxLayout" name="commentLayout">
+        <item>
+         <widget class="QLabel" name="commentLabel">
+          <property name="text">
+           <string>Comments:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QTextEdit" name="textEdit_comment">
+          <property name="placeholderText">
+           <string>Comment or mention with @user, @@version, @@@task...</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="buttonLayout">
+          <item>
+           <spacer name="horizontalSpacer_comment">
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pushButton_comment">
+            <property name="text">
+             <string>Comment</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
