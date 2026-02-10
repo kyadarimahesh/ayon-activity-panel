@@ -18,35 +18,57 @@ class ActivityPanelHelper:
             from qtpy.QtWidgets import QDockWidget
             from qtpy.QtCore import Qt, QSettings
             import ayon_api
-            
+
             if project_name is None:
                 project_name = get_current_project_name()
-            
+
+            # Get addon settings
+            settings = {}
+            try:
+                from ayon_core.addon import AddonsManager
+                import ayon_api
+
+                manager = AddonsManager()
+                addon = manager.get("activity_panel")
+                if addon and hasattr(addon, 'get_settings'):
+                    settings = addon.get_settings()
+
+                if not settings:
+                    from ayon_core.pipeline import get_current_project_name
+                    project_name = get_current_project_name()
+                    if project_name:
+                        settings = ayon_api.get_addon_project_settings(
+                            "activity_panel", project_name
+                        )
+            except Exception:
+                pass
+
             panel = ActivityPanel(
                 project_name=project_name,
                 parent=parent or self._parent,
-                bind_rv_events=bind_rv_events
+                bind_rv_events=bind_rv_events,
+                settings=settings
             )
-            
+
             dock = QDockWidget("Activity Panel", parent or self._parent)
             dock.setWidget(panel)
-            
+
             if parent or self._parent:
                 (parent or self._parent).addDockWidget(Qt.RightDockWidgetArea, dock)
-            
-            settings = QSettings("AYON", "ActivityPanelAddon")
-            if splitter_state := settings.value("splitter_state"):
+
+            ui_settings = QSettings("AYON", "ActivityPanelAddon")
+            if splitter_state := ui_settings.value("splitter_state"):
                 panel.ui.mainSplitter.restoreState(splitter_state)
-            if dock_geometry := settings.value("dock_geometry"):
+            if dock_geometry := ui_settings.value("dock_geometry"):
                 dock.restoreGeometry(dock_geometry)
-            
+
             dock.destroyed.connect(
-                lambda: settings.setValue("splitter_state", panel.ui.mainSplitter.saveState())
+                lambda: ui_settings.setValue("splitter_state", panel.ui.mainSplitter.saveState())
             )
-            
+
             if bind_rv_events:
                 panel.enable_rv_events()
-            
+
             self._activity_panel_dock = dock
 
         return self._activity_panel_dock

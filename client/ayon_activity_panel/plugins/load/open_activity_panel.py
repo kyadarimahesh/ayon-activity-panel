@@ -1,74 +1,102 @@
-"""Loader action to open Activity Panel."""
-import logging
-from ayon_core.pipeline import load
+"""Loader action to open Activity Panel in Tray Browser."""
+from typing import Optional, Any
 
-log = logging.getLogger(__name__)
+from ayon_core.lib import Logger
+from ayon_core.pipeline.actions import (
+    LoaderSimpleActionPlugin,
+    LoaderActionSelection,
+    LoaderActionResult,
+)
+
+log = Logger.get_logger(__name__)
+
+# Global reference to keep panel alive
+_activity_panel_instance = None
 
 
-class OpenActivityPanel(load.LoaderPlugin):
-    """Open Activity Panel for selected version."""
+class OpenActivityPanelAction(LoaderSimpleActionPlugin):
+    """Open Activity Panel for selected version in Tray Browser."""
 
-    families = ["*"]
-    representations = ["*"]
     label = "Open Activity Panel"
-    order = 100
-    icon = "comment"
+    order = 1
+    icon = {
+        "type": "awesome-font",
+        "name": "fa.comment",
+        "color": "#4CAF50",
+    }
 
-    def load(self, context, name=None, namespace=None, options=None):
-        """Show activity panel for the selected version.
-        
-        Args:
-            context (dict): Loader context with version information.
-            name (str): Not used.
-            namespace (str): Not used.
-            options (dict): Not used.
-        """
+    def is_compatible(self, selection: LoaderActionSelection) -> bool:
+        """Always compatible when versions are selected."""
+        return selection.versions_selected()
+
+    def execute_simple_action(
+            self,
+            selection: LoaderActionSelection,
+            form_values: dict[str, Any],
+    ) -> Optional[LoaderActionResult]:
+        """Show activity panel for the selected version."""
+        global _activity_panel_instance
+
         try:
             from ayon_activity_panel import ActivityPanel
-            from qtpy.QtWidgets import QDockWidget, QApplication
-            from qtpy.QtCore import Qt
+            import ayon_api
         except ImportError as e:
-            log.error(f"Failed to import Activity Panel: {e}")
-            return
+            return LoaderActionResult(
+                f"Activity Panel addon not available: {e}",
+                success=False,
+            )
 
-        # Get main window
-        main_window = None
-        for widget in QApplication.topLevelWidgets():
-            if widget.objectName() == "MainWindow":
-                main_window = widget
-                break
+        versions = selection.get_selected_version_entities()
+        if not versions:
+            return LoaderActionResult(
+                "No version selected",
+                success=False,
+            )
 
-        if not main_window:
-            log.warning("Could not find main window")
-            return
+        version = versions[0]
+        version_id = version.get("id")
+        project_name = selection.project_name
 
-        # Create or show existing panel
-        existing_dock = main_window.findChild(QDockWidget, "ActivityPanelDock")
-        if existing_dock:
-            existing_dock.show()
-            existing_dock.raise_()
-            return
+        log.info(f"Version ID: {version_id}, Project: {project_name}")
 
-        # Create new panel
-        panel = ActivityPanel(bind_rv_events=False)
-        dock = QDockWidget("AYON Activity Panel", main_window)
-        dock.setObjectName("ActivityPanelDock")
-        dock.setWidget(panel)
-        main_window.addDockWidget(Qt.RightDockWidgetArea, dock)
-        dock.show()
+        # Reuse existing panel if available
+        if _activity_panel_instance is not None:
+            try:
+                _activity_panel_instance.show()
+                _activity_panel_instance.raise_()
+                _activity_panel_instance.activateWindow()
+                panel = _activity_panel_instance
+            except RuntimeError:
+                _activity_panel_instance = None
 
-        # Set version data
-        version_id = context["version"]["id"]
-        project_name = context["project"]["name"]
-        
-        version_data = {
-            "version_id": version_id,
-            "project_name": project_name,
-            "current_version": context["version"]["name"],
-            "path": context.get("folder", {}).get("path", ""),
-        }
-        
-        panel.set_project(project_name)
-        panel.set_version(version_id, version_data)
-        
-        log.info(f"Opened Activity Panel for version: {version_id}")
+        # Create new panel if needed
+        if _activity_panel_instance is None:
+            settings = {}
+            try:
+                from ayon_core.addon import AddonsManager
+
+                manager = AddonsManager()
+                addon = manager.get("activity_panel")
+                if addon and hasattr(addon, 'get_settings'):
+                    settings = addon.get_settings()
+
+                if not settings:
+                    settings = ayon_api.get_addon_project_settings(
+                        "activity_panel", project_name
+                    )
+            except Exception:
+                pass
+
+            panel = ActivityPanel(project_name=project_name, bind_rv_events=False, settings=settings)
+            panel.setWindowTitle("AYON Activity Panel")
+            panel.resize(600, 800)
+            _activity_panel_instance = panel
+
+        # Set version - panel will auto-build version_data
+        panel.set_version(version_id, project_name=project_name)
+        panel.show()
+
+        return LoaderActionResult(
+            f"Activity Panel opened for version {version_id}",
+            success=True,
+        )

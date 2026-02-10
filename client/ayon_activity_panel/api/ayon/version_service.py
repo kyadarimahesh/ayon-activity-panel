@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from typing import Optional, List, Dict, Any
 from .base_client import BaseAyonClient
@@ -123,6 +125,19 @@ class VersionService(BaseAyonClient):
             logger.error(f"Error updating version {version_id} status to {status}: {e}")
             return False
 
+    def update_task_status(self, project_name: str, task_id: str, status: str) -> bool:
+        """Update task status."""
+        if self.ayon_connection is None:
+            logger.error(f"Connection error: {self.connection_error}")
+            return False
+
+        try:
+            self.ayon_connection.update_task(project_name, task_id, status=status)
+            return True
+        except Exception as e:
+            logger.error(f"Error updating task {task_id} status to {status}: {e}")
+            return False
+
     def get_version_reviewables(self, project_name: str, version_id: str) -> List[Dict[str, Any]]:
         """Get reviewables for a version."""
         if self.ayon_connection is None:
@@ -144,6 +159,9 @@ class VersionService(BaseAyonClient):
             logger.error(f"Connection error: {self.connection_error}")
             return []
 
+        if not project_name:
+            return []
+
         try:
             query = """
             query GetVersionStatuses($projectName: String!) {
@@ -151,6 +169,7 @@ class VersionService(BaseAyonClient):
                     statuses {
                         name
                         color
+                        icon
                         scope
                     }
                 }
@@ -161,7 +180,7 @@ class VersionService(BaseAyonClient):
             if result and "data" in result and result["data"].get("project"):
                 statuses = result["data"]["project"]["statuses"]
                 return [
-                    {"value": status["name"], "color": status.get("color")}
+                    {"value": status["name"], "color": status.get("color"), "icon": status.get("icon")}
                     for status in statuses
                     if "version" in status.get("scope", [])
                 ]
@@ -169,3 +188,117 @@ class VersionService(BaseAyonClient):
         except Exception as e:
             logger.error(f"Error getting version statuses for project {project_name}: {e}")
             return []
+
+    def get_task_statuses(self, project_name: str) -> List[Dict[str, str]]:
+        """Get available task statuses for a project."""
+        if self.ayon_connection is None:
+            logger.error(f"Connection error: {self.connection_error}")
+            return []
+
+        if not project_name:
+            return []
+
+        try:
+            query = """
+            query GetTaskStatuses($projectName: String!) {
+                project(name: $projectName) {
+                    statuses {
+                        name
+                        color
+                        icon
+                        scope
+                    }
+                }
+            }
+            """
+            result = self.graphql_query(query, {"projectName": project_name})
+
+            if result and "data" in result and result["data"].get("project"):
+                statuses = result["data"]["project"]["statuses"]
+                return [
+                    {"value": status["name"], "color": status.get("color"), "icon": status.get("icon")}
+                    for status in statuses
+                    if "task" in status.get("scope", [])
+                ]
+            return []
+        except Exception as e:
+            logger.error(f"Error getting task statuses for project {project_name}: {e}")
+            return []
+
+    def build_version_data_from_id(self, project_name: str, version_id: str) -> Optional[Dict[str, Any]]:
+        """Build complete version_data dictionary from version_id.
+        
+        This centralizes version_data building so integrations only need to pass version_id.
+        
+        Args:
+            project_name: Project name
+            version_id: Version ID
+            
+        Returns:
+            Complete version_data dict or None if version not found
+        """
+        if self.ayon_connection is None:
+            logger.error(f"Connection error: {self.connection_error}")
+            return None
+
+        try:
+            import ayon_api
+
+            version = ayon_api.get_version_by_id(project_name, version_id)
+            if not version:
+                logger.error(f"Version not found: {version_id}")
+                return None
+
+            product_id = version.get("productId")
+            task_id = version.get("taskId")
+            folder_path = ""
+            product_name = "Unknown"
+            all_product_versions = []
+            versions_list = []
+            representations = []
+
+            if product_id:
+                product = ayon_api.get_product_by_id(project_name, product_id)
+                if product:
+                    product_name = product.get("name", "Unknown")
+                    folder_id = product.get("folderId")
+                    if folder_id:
+                        folder = ayon_api.get_folder_by_id(project_name, folder_id)
+                        if folder:
+                            folder_path = folder.get("path", "")
+
+                    all_product_versions = list(ayon_api.get_versions(
+                        project_name,
+                        product_ids=[product_id],
+                        fields=["id", "version", "status", "author", "taskId"]
+                    ))
+                    versions_list = [
+                        f"v{v['version']:03d}"
+                        for v in sorted(all_product_versions, key=lambda x: x['version'], reverse=True)
+                    ]
+
+            # Fetch representations
+            for rep in ayon_api.get_representations(project_name, version_ids=[version_id]):
+                representations.append({
+                    'id': rep['id'],
+                    'name': rep['name'],
+                    'path': rep.get('attrib', {}).get('path', '')
+                })
+
+            return {
+                "version_id": version_id,
+                "project_name": project_name,
+                "product_id": product_id,
+                "product_name": product_name,
+                "task_id": task_id,
+                "current_version": f"v{version.get('version', 1):03d}",
+                "version_status": version.get("status", "N/A"),
+                "author": version.get("author", "N/A"),
+                "path": folder_path,
+                "versions": versions_list,
+                "all_product_versions": all_product_versions,
+                "representations": representations,
+            }
+        except Exception as e:
+            logger.error(f"Error building version data for {version_id}: {e}")
+            return None

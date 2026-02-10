@@ -2,16 +2,23 @@
 
 from .version import __version__
 from .widget import ActivityPanel
-from .constants import ACTIVITY_PANEL_ROOT_DIR
+from .control import ActivityPanelController
+from .abstract import (
+    BackendActivityPanelController,
+    FrontendActivityPanelController,
+)
 from .api.tools import show_activity_panel
 
 try:
     from .addon import ActivityPanelAddon
+
     __all__ = (
         "__version__",
         "ActivityPanelAddon",
         "ActivityPanel",
-        "ACTIVITY_PANEL_ROOT_DIR",
+        "ActivityPanelController",
+        "BackendActivityPanelController",
+        "FrontendActivityPanelController",
         "show_activity_panel",
     )
 except ImportError:
@@ -19,6 +26,8 @@ except ImportError:
     __all__ = (
         "__version__",
         "ActivityPanel",
-        "ACTIVITY_PANEL_ROOT_DIR",
+        "ActivityPanelController",
+        "BackendActivityPanelController",
+        "FrontendActivityPanelController",
         "show_activity_panel",
     )

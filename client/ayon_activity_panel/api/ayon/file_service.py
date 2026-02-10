@@ -1,6 +1,5 @@
 import os
 
-import requests
 import tempfile
 from typing import Optional
 from pathlib import Path
@@ -11,6 +10,7 @@ class FileService:
     @staticmethod
     def upload_file(project_name: str, file_path: str, activity_id: str = None) -> Optional[str]:
         import mimetypes
+        from .base_client import get_requests_session
 
         try:
             safe_path = Path(file_path).resolve()
@@ -33,14 +33,15 @@ class FileService:
             headers["X-Activity-Id"] = activity_id
 
         try:
+            session = get_requests_session()
             with open(safe_path, 'rb') as f:
-                response = requests.post(
+                response = session.post(
                     f"{os.environ['AYON_SERVER_URL']}/api/projects/{project_name}/files",
                     data=f.read(),
                     headers=headers,
                     timeout=30
                 )
-        except (FileNotFoundError, PermissionError, requests.RequestException) as e:
+        except (FileNotFoundError, PermissionError) as e:
             print(f"Error uploading file: {e}")
             return None
 

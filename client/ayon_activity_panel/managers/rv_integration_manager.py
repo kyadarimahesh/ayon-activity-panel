@@ -1,88 +1,53 @@
 """RV Integration for Activity Panel - listens for AYON source loaded events."""
-import logging
 import json
 
 try:
     import rv.commands
+
     RV_AVAILABLE = True
 except ImportError:
     RV_AVAILABLE = False
 
 from qtpy.QtCore import QTimer
 
-log = logging.getLogger(__name__)
+from ayon_core.lib import Logger
+
+log = Logger.get_logger(__name__)
 
 
-class RVActivityPanelIntegration:
+class RVIntegrationManager:
     """Listens for AYON source loaded events and updates activity panel."""
 
-    def __init__(self, activity_panel):
+    def __init__(self, activity_panel, debounce_ms=500):
         """Initialize RV integration.
         
         Args:
             activity_panel: Activity panel widget instance.
+            debounce_ms: Debounce delay in milliseconds.
         """
         self.activity_panel = activity_panel
         self._bound = False
         self.current_version_id = None
+        self._debounce_ms = debounce_ms
 
-        # Debounce timer for updates
         self.update_timer = QTimer()
         self.update_timer.setSingleShot(True)
         self.update_timer.timeout.connect(self._update_for_current_source)
 
     @staticmethod
     def _read_node_metadata(node):
-        """Read version metadata from RV node properties."""
+        """Read minimal metadata from RV node."""
         if not RV_AVAILABLE:
             return None
-
         try:
-            import json
-
             if not rv.commands.propertyExists(f"{node}.ayon.version_id"):
                 return None
-
-            def get_prop(key):
-                prop = f"{node}.ayon.{key}"
-                if rv.commands.propertyExists(prop):
-                    values = rv.commands.getStringProperty(prop)
-                    return values[0] if values else None
-                return None
-
-            def get_json_prop(key):
-                """Get property and parse as JSON if it's a string."""
-                value = get_prop(key)
-                if value:
-                    try:
-                        return json.loads(value)
-                    except:
-                        return value
-                return None
-
-            metadata = {
-                'version_id': get_prop('version_id'),
-                'representation_id': get_prop('representation_id'),
-                'file_path': get_prop('file_path'),
-                'product_id': get_prop('product_id'),
-                'product_name': get_prop('product_name'),
-                'task_id': get_prop('task_id'),
-                'path': get_prop('folder_path'),
-                'current_version': get_prop('version_name'),
-                'version_status': get_prop('version_status'),
-                'author': get_prop('author'),
-                'project_name': get_prop('project_name'),
-                'versions': get_json_prop('versions'),
-                'all_product_versions': get_json_prop('all_product_versions'),
-                'representations': get_json_prop('representations'),
-                'current_representation_path': get_prop('file_path')
+            return {
+                'version_id': rv.commands.getStringProperty(f"{node}.ayon.version_id")[0],
+                'project_name': rv.commands.getStringProperty(f"{node}.ayon.project_name")[0]
             }
-
-            return metadata
         except Exception as e:
             log.error(f"Error reading metadata: {e}")
-            import traceback
-            traceback.print_exc()
             return None
 
     def is_active(self):
@@ -138,7 +103,7 @@ class RVActivityPanelIntegration:
 
         try:
             log.info("🟣 [RV INTEGRATION] Binding RV events...")
-            
+
             # Custom AYON event - fired when assets loaded
             rv.commands.bind(
                 "default", "global", "ayon_source_loaded",
@@ -167,25 +132,13 @@ class RVActivityPanelIntegration:
                 "Activity Panel: Update on frame change"
             )
 
-            # Stack navigation - ( and ) keys
-            rv.commands.bind(
-                "default", "global", "key-down--(",
-                self._on_stack_backward,
-                "Activity Panel: Update on stack backward"
-            )
-            rv.commands.bind(
-                "default", "global", "key-down--)",
-                self._on_stack_forward,
-                "Activity Panel: Update on stack forward"
-            )
-
             self._bound = True
             log.info("🟣 [RV INTEGRATION] RV events bound successfully")
         except Exception as e:
             log.warning(f"🟣 [RV INTEGRATION] Failed to bind Activity Panel to RV events: {e}")
 
     def _on_ayon_source_loaded(self, event):
-        """Handle AYON source loaded event - register source mapping."""
+        """Handle AYON source loaded event - minimal data, auto-build rest."""
         try:
             event_contents = event.contents()
             if not event_contents:
@@ -193,36 +146,18 @@ class RVActivityPanelIntegration:
 
             data = json.loads(event_contents)
             version_id = data.get('version_id')
+            project_name = data.get('project_name')
 
-            if not version_id:
-                log.error("No version_id in event data")
+            if not version_id or not project_name:
+                log.error("Missing version_id or project_name in event")
                 return
 
-            # Build row_data from event
-            row_data = {
-                'version_id': version_id,
-                'task_id': data.get('task_id'),
-                'product_id': data.get('product_id'),
-                'product_name': data.get('product_name'),
-                'path': data.get('path'),
-                'current_version': data.get('current_version'),
-                'versions': data.get('versions', []),
-                'all_product_versions': data.get('all_product_versions', []),
-                'version_status': data.get('version_status'),
-                'author': data.get('author'),
-                'representations': data.get('representations', []),
-                'current_representation_path': data.get('current_representation_path', '')
-            }
-
-            # Update panel immediately for first load
-            project_name = data.get('project_name')
-            if project_name:
-                self.activity_panel.set_project(project_name)
-
-            self.activity_panel.set_version(version_id, row_data)
+            self.activity_panel.set_project(project_name)
+            self.activity_panel.set_version(version_id, project_name=project_name)
             self.current_version_id = version_id
 
         except Exception as e:
+            log.error(f"Error handling ayon_source_loaded: {e}")
             import traceback
             traceback.print_exc()
 
@@ -238,71 +173,34 @@ class RVActivityPanelIntegration:
         """Handle frame change - update if source changed."""
         self._debounced_update()
 
-    def _on_stack_backward(self, event):
-        """Handle stack backward navigation (( key)."""
-        self.current_version_id = None  # Force update
-        self._debounced_update()
-
-    def _on_stack_forward(self, event):
-        """Handle stack forward navigation () key)."""
-        self.current_version_id = None  # Force update
-        self._debounced_update()
-
     def _debounced_update(self):
         """Debounce updates to avoid excessive API calls."""
-        self.update_timer.start(500)  # 500 ms debounce
+        self.update_timer.start(self._debounce_ms)
 
     def _update_for_current_source(self):
         """Update activity panel for current visible source."""
         try:
-            log.info("🟣 [RV ACTIVITY PANEL] _update_for_current_source triggered")
-            
             current_source = self._get_current_source()
             if not current_source:
-                log.info("🟣 [RV ACTIVITY PANEL] No current source found")
                 return
 
-            log.info(f"🟣 [RV ACTIVITY PANEL] Reading metadata from node: {current_source}")
-            
-            # Read metadata directly from node
             metadata = self._read_node_metadata(current_source)
-            if not metadata or not metadata.get('version_id'):
-                log.info("🟣 [RV ACTIVITY PANEL] No metadata or version_id on node")
+            if not metadata or not metadata.get('version_id') or not metadata.get('project_name'):
                 return
 
             version_id = metadata['version_id']
-            project_name = metadata.get('project_name')
-            
-            log.info(f"🟣 [RV ACTIVITY PANEL] Metadata read:")
-            log.info(f"   - version_id: {version_id}")
-            log.info(f"   - project_name: {project_name}")
-            log.info(f"   - version_status: {metadata.get('version_status')}")
+            project_name = metadata['project_name']
 
-            # Only update if version changed
             if version_id == self.current_version_id:
-                log.info("🟣 [RV ACTIVITY PANEL] Same version as before, skipping update")
                 return
 
             self.current_version_id = version_id
-
-            # Use metadata as row_data
-            row_data = metadata
-
-            # Set project if available
             if project_name:
-                log.info(f"🟣 [RV ACTIVITY PANEL] Calling set_project({project_name})")
-                log.info(f"🟣 [RV ACTIVITY PANEL] Current panel.available_statuses: {len(self.activity_panel.available_statuses)}")
                 self.activity_panel.set_project(project_name)
-                log.info(f"🟣 [RV ACTIVITY PANEL] After set_project, panel.available_statuses: {len(self.activity_panel.available_statuses)}")
-
-            log.info(f"🟣 [RV ACTIVITY PANEL] Calling set_version({version_id})")
-            self.activity_panel.set_version(version_id, row_data)
-            log.info(f"🟣 [RV ACTIVITY PANEL] set_version completed")
+            self.activity_panel.set_version(version_id, project_name=project_name)
 
         except Exception as e:
-            log.error(f"🟣 [RV ACTIVITY PANEL] Error: {e}")
-            import traceback
-            traceback.print_exc()
+            log.error(f"Error updating for current source: {e}")
 
     @staticmethod
     def _get_current_source():
@@ -315,70 +213,3 @@ class RVActivityPanelIntegration:
             return source
         except:
             return None
-
-    def on_version_dropdown_changed(self, new_version_name, all_product_versions, versions_list):
-        """Handle version dropdown change - update node metadata.
-        
-        Args:
-            new_version_name (str): New version name.
-            all_product_versions (list): All product versions.
-            versions_list (list): List of version names.
-        """
-        log.debug(f"Version dropdown changed to: {new_version_name}")
-
-        if not RV_AVAILABLE or not all_product_versions:
-            log.warning("RV not available or no versions")
-            return
-
-        try:
-            current_source = self._get_current_source()
-            if not current_source:
-                log.error("No current source")
-                return
-
-            # Find new version data by name
-            new_version_data = None
-            for version in all_product_versions:
-                version_name = version.get('name') or f"v{version.get('version', 0):03d}"
-                if version_name == new_version_name:
-                    new_version_data = version
-                    break
-
-            if not new_version_data:
-                log.error(f"Version data not found for: {new_version_name}")
-                return
-
-            # Update node metadata including versions arrays
-            self._update_node_metadata(current_source, new_version_data, all_product_versions, versions_list)
-
-            # Update current version tracking
-            self.current_version_id = new_version_data.get('id')
-
-        except Exception as e:
-            log.error(f"RV Integration Error: {e}")
-            import traceback
-            traceback.print_exc()
-
-    @staticmethod
-    def _update_node_metadata(node, version_data, all_product_versions, versions_list):
-        """Update RV node metadata with new version data."""
-        if not RV_AVAILABLE:
-            return
-
-        import json
-
-        metadata = {
-            'version_id': version_data.get('id'),
-            'version_name': version_data.get('name'),
-            'version_status': version_data.get('status'),
-            'author': version_data.get('author'),
-            'versions': json.dumps(versions_list),
-            'all_product_versions': json.dumps(all_product_versions)
-        }
-
-        for key, value in metadata.items():
-            if value:
-                prop = f"{node}.ayon.{key}"
-                if not rv.commands.propertyExists(prop):
-                    rv.commands.newProperty(prop, rv.commands.StringType, 1)
-                rv.commands.setStringProperty(prop, [value], True)

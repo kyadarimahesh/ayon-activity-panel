@@ -50,7 +50,7 @@ class AyonClient:
     def get_activities(self, project_name: str, entity_ids: List[str],
                        reference_types: List[str] = None,
                        activity_types: List[str] = None,
-                       last: int = 100, before: str = None) -> Dict:
+                       last: int = 50, before: str = None, dcc_mode: bool = False) -> Dict:
         """Get activity feed/comments (latest activities)"""
         query = """
         query GetActivities(
@@ -79,6 +79,7 @@ class AyonClient:
               edges {
                 cursor
                 node {
+                  activityId
                   activityType
                   activityData
                   createdAt
@@ -97,10 +98,12 @@ class AyonClient:
           }
         }
         """
+
+        default_ref_types = ['origin', 'mention', 'relation'] if dcc_mode else ['origin', 'mention']
         result = self.graphql_query(query, {
             'projectName': project_name,
             'entityIds': entity_ids,
-            'referenceTypes': reference_types or ['origin', 'mention', 'relation'],
+            'referenceTypes': reference_types or default_ref_types,
             'activityTypes': activity_types,
             'last': last,
             'before': before

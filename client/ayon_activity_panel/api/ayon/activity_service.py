@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import concurrent.futures
 import base64
 import mimetypes
@@ -22,12 +24,18 @@ class ActivityService(BaseAyonClient):
                 if response.status_code == 200:
                     mime_type, _ = mimetypes.guess_type(file_name)
                     img_data = base64.b64encode(response.content).decode('utf-8')
+                    # Close response to return connection to pool
+                    if hasattr(response, 'close'):
+                        response.close()
                     return file_id, (img_data, mime_type)
+                if hasattr(response, 'close'):
+                    response.close()
                 return file_id, None
             except Exception:
                 return file_id, None
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        # Limit concurrent downloads to avoid pool exhaustion
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             future_to_file = {executor.submit(download_single_file, file_info): file_info['id']
                               for file_info in file_data}
 
@@ -55,8 +63,8 @@ class ActivityService(BaseAyonClient):
 
             self.ayon_connection.create_activity(
                 project_name=project_name,
-                entity_type=entity_type,
                 entity_id=entity_id,
+                entity_type=entity_type,
                 activity_type='comment',
                 body=formatted_message,
                 file_ids=file_ids or None
@@ -64,6 +72,11 @@ class ActivityService(BaseAyonClient):
             return file_ids
         except Exception as e:
             print(f"Error creating comment: {e}")
+            # Print response body if available
+            if hasattr(e, 'response') and hasattr(e.response, 'text'):
+                print(f"Response body: {e.response.text}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def _determine_entity(self, project_name: str, version_id: str,
@@ -105,7 +118,7 @@ class ActivityService(BaseAyonClient):
     def _upload_files(self, project_name: str, file_paths: List[str]) -> List[str]:
         """Upload files and return their IDs."""
         file_ids = []
-        for i, fp in enumerate(file_paths):
+        for fp in file_paths:
             try:
                 file_id = self.file_service.upload_file(project_name, fp)
                 file_ids.append(file_id)
@@ -115,202 +128,114 @@ class ActivityService(BaseAyonClient):
                 traceback.print_exc()
         return file_ids
 
-    def process_version_activities(self, project_name: str, version_id: str,
-                                   task_id: Optional[str] = None,
-                                   path: Optional[str] = None,
-                                   status_colors: dict = None,
-                                   update_callback=None) -> str:
-        """Optimized UX: instant text + smart image loading."""
+    def update_activity(self, project_name: str, activity_id: str, body: str) -> bool:
+        """Update activity body."""
+        try:
+            self.ayon_connection.update_activity(
+                project_name=project_name,
+                activity_id=activity_id,
+                body=body
+            )
+            return True
+        except Exception as e:
+            print(f"Error updating activity: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def process_version_activities_native(self, project_name: str, version_id: str,
+                                          task_id: Optional[str] = None,
+                                          path: Optional[str] = None,
+                                          status_colors: dict = None,
+                                          version_data: dict = None,
+                                          update_callback=None):
+        """Process activities and return structured data for native Qt rendering."""
+
         if self.ayon_connection is None:
-            return "<p>Connection error: Unable to load activities</p>"
+            return
 
         try:
-            # Collect entity IDs to fetch activities from
-            entity_ids = [version_id]  # Always include version
+            # Check if DCC mode (no version_id in version_data)
+            dcc_mode = version_data and 'version_id' not in version_data
 
-            # Add task if available
-            if task_id and task_id != "N/A":
-                entity_ids.append(task_id)
+            # Collect entity IDs based on mode
+            if dcc_mode:
+                # DCC mode: fetch all activities for the task
+                entity_ids = [task_id] if task_id and task_id != "N/A" else []
+            else:
+                # Version mode: fetch activities for version and task
+                entity_ids = [version_id]
+                if task_id and task_id != "N/A":
+                    entity_ids.append(task_id)
 
-            # Fetch activities using AyonClient API
+            # Fetch activities
             from .ayon_client_api import AyonClient
             client = AyonClient()
             response = client.get_activities(
                 project_name=project_name,
                 entity_ids=entity_ids,
-                activity_types=['comment', 'status.change']
+                activity_types=['comment', 'status.change', 'version.publish'],
+                dcc_mode=dcc_mode,
+                last=50  # Initial load only
             )
 
-            # Extract activities from GraphQL response
+            # Extract all activities (no limit)
             activities = []
+            page_info = {}
             if response and 'project' in response and response['project']:
+                page_info = response['project'].get('activities', {}).get('pageInfo', {})
                 edges = response['project'].get('activities', {}).get('edges', [])
-                # Deduplicate activities by ID (same activity can appear for both version and task)
                 seen_ids = set()
                 for edge in edges:
                     if edge.get('node'):
                         activity = edge['node']
-                        # Use a combination of fields to create unique ID
-                        activity_id = f"{activity.get('activityType')}_{activity.get('createdAt')}_{activity.get('body', '')[:50]}"
-                        if activity_id not in seen_ids:
+                        activity_id = activity.get('activityId')
+                        if activity_id and activity_id not in seen_ids:
                             seen_ids.add(activity_id)
                             activities.append(activity)
-                # Reverse to show newest first
                 activities.reverse()
         except Exception as e:
-            return f"<p>Error loading activities: {e}</p>"
+            print(f"Error loading activities: {e}")
+            return
 
-        try:
-            text_html = self._generate_text_html(activities, status_colors)
-            if update_callback:
-                update_callback(text_html, "text_ready")
+        # Send activities data with pagination info
+        activities_data = {
+            'activities': activities,
+            'product_name': version_data.get('product_name', 'Unknown') if version_data else 'Unknown',
+            'current_version': version_data.get('current_version', 'v000') if version_data else 'v000',
+            'status_colors': status_colors or {},
+            'page_info': page_info
+        }
 
-            all_files = []
-            for activity in activities:
-                if activity['activityType'] == 'comment':
-                    data = activity.get('activityData', {})
-                    # Parse activityData if it's a JSON string
-                    if isinstance(data, str):
-                        try:
-                            import json
-                            data = json.loads(data)
-                        except:
-                            data = {}
-                    files = data.get("files", [])
-                    all_files.extend(files)
+        if update_callback:
+            update_callback(activities_data, "activities_ready")
 
-            if all_files and update_callback:
-                update_callback(len(all_files), "image_count")
-                self._load_images_smart(project_name, all_files, update_callback)
-
-            return text_html
-        except Exception as e:
-            return f"<p>Error processing activities: {e}</p>"
-
-    def _generate_text_html(self, activities, status_colors=None):
-        """Generate instant text-only HTML for immediate display."""
-        html_output = "<div style='font-family: Arial, sans-serif; color: #ffffff; background-color: transparent;'>\n"
-
-        for i, activity in enumerate(activities):
-            bg_color = "rgba(255,255,255,0.05)" if i % 2 == 0 else "transparent"
-            activity_type = activity['activityType']
-            body = activity.get('body', '')
-            data = activity.get('activityData', {})
-
-            # Parse activityData if it's a JSON string
-            if isinstance(data, str):
-                try:
-                    import json
-                    data = json.loads(data)
-                except:
-                    data = {}
-
-            if activity_type == 'comment':
-                import html, re
-                # Get author from activity.author.name or activityData.author
-                author_obj = activity.get('author', {})
-                if isinstance(author_obj, dict):
-                    author = html.escape(author_obj.get('name', 'Unknown'))
-                else:
-                    author = html.escape(data.get('author', 'Unknown'))
-
-                # Get timestamp
-                created_at = activity.get('createdAt', '')
-                timestamp = self._format_timestamp(created_at)
-
-                # Clean message - remove all markdown-style tags [text](type:id)
-                clean_msg = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", body) or "(no message)"
-                clean_msg = html.escape(clean_msg.strip()).replace('\n', '<br/>')
-
-                html_output += f"""
-                <div style="background-color: {bg_color}; padding: 8px; margin: 2px 0;">
-                    🗨️ Comment (by {author}) - <span style="color: #888; font-size: 11px;">{timestamp}</span><br/>
-                    &emsp;- {clean_msg}<br/>
-                """
-
+        # Load images asynchronously
+        for idx, activity in enumerate(activities):
+            if activity['activityType'] == 'comment':
+                data = activity.get('activityData', {})
+                if isinstance(data, str):
+                    try:
+                        import json
+                        data = json.loads(data)
+                    except:
+                        data = {}
                 files = data.get("files", [])
-                # Filter out annotation files
-                filtered_files = [f for f in files if not f['filename'].startswith('annotation-')]
-                if filtered_files:
-                    html_output += f"&emsp;📎 {len(filtered_files)} attachment(s):<br/>"
-                    for file_info in filtered_files:
-                        filename = file_info['filename']
-                        file_id = file_info['id']
-                        html_output += f'''
-                        <span style="display: inline-block; width: 200px; margin: 5px; text-align: center; vertical-align: top;">
-                            <div id="loading_{file_id}">Loading...</div>
-                            <div style="font-size: 11px; color: #aaa; margin-top: 4px;">{filename}</div>
-                        </span>
-                        '''
-                    html_output += '<br/>'
+                if files and update_callback:
+                    self._load_images_for_activity(project_name, idx, files, update_callback)
 
-                html_output += "<hr style='border: none; border-top: 1px solid #666;'/>\n</div>"
-
-            elif activity_type == 'status.change':
-                import html
-                # Get author from activity.author.name or activityData.author
-                author_obj = activity.get('author', {})
-                if isinstance(author_obj, dict):
-                    author = html.escape(author_obj.get('name', 'Unknown'))
-                else:
-                    author = html.escape(data.get('author', 'Unknown'))
-
-                # Get timestamp
-                created_at = activity.get('createdAt', '')
-                timestamp = self._format_timestamp(created_at)
-
-                old_status = html.escape(data.get("oldValue", "Unknown"))
-                new_status = html.escape(data.get("newValue", "Unknown"))
-
-                old_color = status_colors.get(old_status, '#ffffff') if status_colors else '#ffffff'
-                new_color = status_colors.get(new_status, '#ffffff') if status_colors else '#ffffff'
-
-                html_output += f"""
-                <div style="background-color: {bg_color}; padding: 8px; margin: 2px 0;">
-                    🔄 Status Change (by {author}) - <span style="color: #888; font-size: 11px;">{timestamp}</span><br/>
-                    &emsp;changed status from '<i style="color: {old_color}">{old_status}</i>' ➜ '<i style="color: {new_color}">{new_status}</i>'<br/>
-                    <hr style='border: none; border-top: 1px solid #666;'/>
-                </div>
-                """
-
-        html_output += "</div>"
-
-        return html_output
-
-    def _format_timestamp(self, timestamp_str):
-        """Format ISO timestamp to readable format in local timezone."""
-        if not timestamp_str:
-            return "Unknown time"
-
-        try:
-            from datetime import datetime
-            # Parse ISO format: 2024-01-15T10:30:00Z
-            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-            # Convert to local timezone
-            dt_local = dt.astimezone()
-            # Format as: Jan 15, 2024 10:30 AM
-            return dt_local.strftime("%b %d, %Y %I:%M %p")
-        except:
-            return timestamp_str
-
-    def _load_images_smart(self, project_name, files, update_callback):
-        """Smart image loading with progress tracking."""
+    def _load_images_for_activity(self, project_name, activity_index, files, update_callback):
+        """Load images for specific activity."""
 
         def load_and_update():
             results = self._download_file_batch(project_name, files)
-
             for file_info in files:
                 file_id = file_info['id']
+                filename = file_info.get('filename', 'unknown')
                 result = results.get(file_id)
-
                 if result and result[0]:
-                    img_data, mime_type = result
-                    filename = file_info['filename']
-                    img_tag = f'<a href="preview:{file_id}:{filename}"><img src="data:{mime_type};base64,{img_data}" width="200" height="100" style="border: 1px solid #666; cursor: pointer; background-color: transparent;" title="Click to preview"/></a>'
-                    update_callback((file_id, img_tag, img_data), "image_ready")
-                else:
-                    error_tag = '<div style="width: 200px; height: 100px; border: 1px solid #ff6666; color: #ff6666; display: flex; align-items: center; justify-content: center;">⚠️ Failed to load</div>'
-                    update_callback((file_id, error_tag, None), "image_ready")
+                    img_data, _ = result
+                    update_callback((activity_index, file_id, img_data, filename), "image_ready")
 
         import threading
         threading.Thread(target=load_and_update, daemon=True).start()
